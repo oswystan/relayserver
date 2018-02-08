@@ -9,21 +9,20 @@
 #######################################################################
 .PHONY: all clean
 
-bin := main
+bin := a.out
 src := $(wildcard *.c *.cpp)
 obj := $(src:.c=.o)
 obj := $(obj:.cpp=.o)
-ld_flags := -static
+ld_flags := -lssl -lcrypto -ldl
 
 all: $(bin)
 
 $(bin): $(obj)
 	@gcc $^ -o $(bin) $(ld_flags)
-	@strip $@
 	@echo "[gen] "$@
 %.o:%.c
 	@echo "[ cc] "$@
-	@gcc -c $< -o $@
+	@gcc -c -g $< -o $@
 %.o:%.cpp
 	@echo "[cpp] "$@
 	@g++ -c $< -o $@

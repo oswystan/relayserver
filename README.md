@@ -1,6 +1,1 @@
-> A minimal c program including:
-
-- makefile
-- log.h
-- main.c
-
+A webrtc relay server
