@@ -10,7 +10,7 @@
  **************************************************************************************
  */
 
-#define LOG_TAG "main"
+#define LOG_TAG "srtp"
 
 #include <string.h>
 #include <unistd.h>
@@ -23,6 +23,7 @@
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
+#include <srtp2/srtp.h>
 
 #include "log.h"
 
@@ -159,6 +160,10 @@ int sec_env_init(int isserver) {
     SSL_CTX_set_read_ahead(ssl_ctx, 1);
     SSL_CTX_set_cipher_list(ssl_ctx, "ALL:NULL:eNULL:aNULL");
     SSL_CTX_set_tlsext_use_srtp(ssl_ctx, "SRTP_AES128_CM_SHA1_80");
+
+    if(0 != srtp_init()) {
+        loge("fail to init srtp");
+    }
 
     logi("secure env setup ok.");
     return 0;
