@@ -283,6 +283,8 @@ int run_client() {
     logfunc();
     int ret = 0;
     char buf[4096];
+    unsigned char material[MASTER_LEN*2];
+    srtp_err_status_t res;
 
     if(0 != sec_env_init(0)) {
         return -1;
@@ -318,6 +320,35 @@ int run_client() {
         goto exit;
     }
     logd("handshake DONE.");
+
+    /* export master and salt */
+    bzero(material, sizeof(material));
+    if(!SSL_export_keying_material(ssl, material, sizeof(material), "EXTRACTOR-dtls_srtp", 19, NULL, 0, 0)) {
+        loge("fail to export key");
+    } else {
+        log("MASTER KEY:");
+        log("\n---------------------\n");
+        for(ret=0; ret<(int)sizeof(material); ret++) {
+            if(ret > 0  && ret % 8 == 0) log("\n");
+            log("%02x ", material[ret]);
+        }
+        log("\n---------------------\n");
+    }
+    bzero(&policy_local, sizeof(policy_local));
+    srtp_crypto_policy_set_rtp_default(&policy_local.rtp);
+    srtp_crypto_policy_set_rtcp_default(&policy_local.rtcp);
+    policy_local.ssrc.type = ssrc_any_inbound;
+    unsigned char master_key[MASTER_LEN];
+    policy_local.key = master_key;
+    policy_local.window_size = 128;
+    policy_local.allow_repeat_tx = 0;
+    memcpy(policy_local.key, material, MASTER_KEY);
+    memcpy(policy_local.key+MASTER_KEY, material+MASTER_LEN, MASTER_SALT);
+    res = srtp_create(&stream_out, &policy_local);
+    if(res != srtp_err_status_ok) {
+        loge("fail to client create srtp: %d", res);
+        goto exit;
+    }
 
     //send message to server
     snprintf(buf, sizeof(buf), "hello, world");
