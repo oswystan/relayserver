@@ -9,9 +9,6 @@
 ##
 ###########################################################################
 
-#openssl genrsa -out privkey.pem 2048
-#openssl req -new -x509 -key privkey.pem -out cacert.pem -days 1095 -subj /C=CN/ST=BJ/L=Beijing/O=TAL/OU=LiveCloud/CN=wystan/emailAddress=wystan@china.com
-openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:1024 -keyout privateKey.key -out certificate.crt -subj /C=CN/ST=BJ/L=Beijing/O=TAL/OU=LiveCloud/CN=wystan/emailAddress=wystan@china.com
-openssl dhparam -out dh_param_2048.pem 2048
+openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -keyout cakey.pem -out cacert.pem -subj /C=CN/ST=BJ/L=Beijing/O=TAL/OU=LiveCloud/CN=wystan/emailAddress=wystan@china.com
 
 ###########################################################################

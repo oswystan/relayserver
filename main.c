@@ -26,14 +26,14 @@
 
 #include "log.h"
 
+#define SSL_CTRL_SET_DH_AUTO 128
+#define SSL_CTX_set_dh_auto(ctx, onoff) SSL_CTX_ctrl(ctx,SSL_CTRL_SET_DH_AUTO,onoff,NULL)
+
 uint16_t srv_port = 8881;
 uint16_t cli_port = 8882;
 const char* srv_ip = "127.0.0.1";
-/*const char* cafile = "cacert.pem";*/
-/*const char* pkfile = "privkey.pem";*/
-const char* cafile = "certificate.crt";
-const char* pkfile = "privateKey.key";
-const char* dhfile = "dh_param_2048.pem";
+const char* cafile = "cacert.pem";
+const char* pkfile = "cakey.pem";
 static SSL_CTX *ssl_ctx  = NULL;
 static X509* ssl_cert    = NULL;
 static EVP_PKEY* ssl_key = NULL;
@@ -81,7 +81,14 @@ int sec_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
     logd("preverify: %d ctx:%p", preverify_ok, ctx);
     return 1;
 }
+int sec_cert_verify_callback(X509_STORE_CTX* store, void* arg) {
+    if(!store || !arg) {
+        return 1;
+    }
+    return 1;
+}
 void sec_info_callback(const SSL* ssl, int where, int ret) {
+    if(!ssl || !ret) {}
     if(where & SSL_CB_LOOP) logd("SSL_CB_LOOP");
     if(where & SSL_CB_EXIT) logd("SSL_CB_EXIT");
     if(where & SSL_CB_READ) logd("SSL_CB_READ");
@@ -114,18 +121,6 @@ int sec_load_key() {
         goto error;
     }
     fclose(fp);
-
-    fp = fopen(dhfile, "r");
-    if(!fp) {
-        loge("fail to open dh file: %s", dhfile);
-        goto error;
-    }
-    ssl_dh = PEM_read_DHparams(fp, NULL, NULL, NULL);
-    if(!ssl_dh) {
-        loge("fail to read dh param");
-        goto error;
-    }
-    fclose(fp);
     return 0;
 
 error:
@@ -137,17 +132,20 @@ error:
     ssl_key  = NULL;
     return -1;
 }
-int sec_env_init() {
+int sec_env_init(int isserver) {
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
-    ssl_ctx = SSL_CTX_new(DTLS_method());
+    if(isserver) {
+        ssl_ctx = SSL_CTX_new(DTLS_server_method());
+    } else {
+        ssl_ctx = SSL_CTX_new(DTLS_client_method());
+    }
     if(!ssl_ctx) {
         loge("fail to create SSL_CTX");
         return -1;
     }
     SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, sec_verify_callback);
-    SSL_CTX_set_tlsext_use_srtp(ssl_ctx, "SRTP_AES128_CM_SHA1_80");
     if(0 != sec_load_key()) return -1;
     if(!SSL_CTX_use_certificate(ssl_ctx, ssl_cert)) {
         loge("fail to use certificate");
@@ -161,12 +159,9 @@ int sec_env_init() {
         loge("fail to check priv key");
         return -1;
     }
-    if(!SSL_CTX_set_tmp_dh(ssl_ctx, ssl_dh)) {
-        loge("fail to set dh");
-    }
     SSL_CTX_set_read_ahead(ssl_ctx, 1);
     SSL_CTX_set_cipher_list(ssl_ctx, "ALL:NULL:eNULL:aNULL");
-    /*SSL_CTX_set_cipher_list(ssl_ctx, "DEFAULT");*/
+    SSL_CTX_set_tlsext_use_srtp(ssl_ctx, "SRTP_AES128_CM_SHA1_80");
 
     logi("secure env setup ok.");
     return 0;
@@ -180,9 +175,14 @@ int run_srv() {
     logfunc();
     int ret = 0;
     struct sockaddr_in addr;
-    char buf[2048];
+    char buf[4096];
     size_t cnt = 0;
+    BIO* bio = NULL;
     EC_KEY* ecdh = NULL;
+
+    if(0 != sec_env_init(1)) {
+        return -1;
+    }
     int fd = udp_new_server();
     if(fd < 0) return -1;
 
@@ -193,7 +193,9 @@ int run_srv() {
     }
     SSL_set_ex_data(ssl, 0, NULL);
     SSL_set_info_callback(ssl, sec_info_callback);
-    SSL_set_fd(ssl, fd);
+    bio = BIO_new_dgram(fd, BIO_NOCLOSE);
+    SSL_set_bio(ssl, bio, bio);
+    SSL_set_accept_state(ssl);
 
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if(!ecdh) {
@@ -203,18 +205,17 @@ int run_srv() {
     SSL_set_options(ssl, SSL_OP_SINGLE_ECDH_USE);
     SSL_set_tmp_ecdh(ssl, ecdh);
     EC_KEY_free(ecdh);
+    SSL_set_read_ahead(ssl, 1);
 
     logd("waiting for handshake %p ...", ssl->handshake_func);
-    do {
-        ret = SSL_accept(ssl);
-    } while( ret == 0);
+    bzero(&addr, sizeof(addr));
+    ret = SSL_accept(ssl);
     if(ret != 1) {
         loge("fail to accept: %d %s", ret, ERR_error_string(SSL_get_error(ssl, ret), NULL));
         goto exit;
     }
     logd("handshake ok.");
 
-    bzero(&addr, sizeof(addr));
     while(1) {
         bzero(buf, sizeof(buf));
         cnt = SSL_read(ssl, buf, sizeof(buf)-1);
@@ -237,7 +238,11 @@ exit:
 int run_client() {
     logfunc();
     int ret = 0;
-    char buf[2048];
+    char buf[4096];
+
+    if(0 != sec_env_init(0)) {
+        return -1;
+    }
     int fd = udp_new_client();
     size_t cnt = 0;
     EC_KEY* ecdh = NULL;
@@ -251,6 +256,7 @@ int run_client() {
     SSL_set_ex_data(ssl, 0, NULL);
     SSL_set_info_callback(ssl, sec_info_callback);
     SSL_set_fd(ssl, fd);
+    SSL_set_read_ahead(ssl, 1);
 
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if(!ecdh) {
@@ -289,7 +295,6 @@ int main(int argc, const char *argv[]) {
         return usage(argv[0]);
     }
 
-    if(0 != sec_env_init()) return -1;
     if (strcmp(argv[1], "s") == 0) return run_srv();
     if (strcmp(argv[1], "c") == 0) return run_client();
 
