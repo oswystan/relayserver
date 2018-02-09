@@ -27,6 +27,10 @@
 
 #include "log.h"
 
+#define MASTER_KEY  16
+#define MASTER_SALT 14
+#define MASTER_LEN  (MASTER_KEY+MASTER_SALT)
+
 uint16_t srv_port = 8881;
 uint16_t cli_port = 8882;
 const char* srv_ip = "127.0.0.1";
@@ -37,6 +41,10 @@ static X509* ssl_cert    = NULL;
 static EVP_PKEY* ssl_key = NULL;
 static DH* ssl_dh        = NULL;
 static SSL* ssl          = NULL;
+static srtp_policy_t policy_remote;
+static srtp_policy_t policy_local;
+static srtp_t        stream_in;
+static srtp_t        stream_out;
 
 int udp_new_server() {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -178,9 +186,11 @@ int run_srv() {
     int ret = 0;
     struct sockaddr_in addr;
     char buf[4096];
+    unsigned char material[MASTER_LEN*2];
     size_t cnt = 0;
     BIO* bio = NULL;
     EC_KEY* ecdh = NULL;
+    srtp_err_status_t res;
 
     if(0 != sec_env_init(1)) {
         return -1;
@@ -209,6 +219,7 @@ int run_srv() {
     EC_KEY_free(ecdh);
     SSL_set_read_ahead(ssl, 1);
 
+    /* do handshake */
     logd("waiting for handshake %p ...", ssl->handshake_func);
     bzero(&addr, sizeof(addr));
     ret = SSL_accept(ssl);
@@ -218,6 +229,36 @@ int run_srv() {
     }
     logd("handshake ok.");
 
+    /* export master and salt */
+    bzero(material, sizeof(material));
+    if(!SSL_export_keying_material(ssl, material, sizeof(material), "EXTRACTOR-dtls_srtp", 19, NULL, 0, 0)) {
+        loge("fail to export key");
+    } else {
+        log("MASTER KEY:");
+        log("\n---------------------\n");
+        for(ret=0; ret<(int)sizeof(material); ret++) {
+            if(ret > 0  && ret % 8 == 0) log("\n");
+            log("%02x ", material[ret]);
+        }
+        log("\n---------------------\n");
+    }
+    bzero(&policy_remote, sizeof(policy_remote));
+    srtp_crypto_policy_set_rtp_default(&policy_remote.rtp);
+    srtp_crypto_policy_set_rtcp_default(&policy_remote.rtcp);
+    policy_remote.ssrc.type = ssrc_any_inbound;
+    unsigned char remote_policy_key[MASTER_LEN];
+    policy_remote.key = remote_policy_key;
+    policy_remote.window_size = 128;
+    policy_remote.allow_repeat_tx = 0;
+    memcpy(policy_remote.key, material, MASTER_KEY);
+    memcpy(policy_remote.key+MASTER_KEY, material+MASTER_LEN, MASTER_SALT);
+    res = srtp_create(&stream_in, &policy_remote);
+    if(res != srtp_err_status_ok) {
+        loge("fail to create srtp: %d", res);
+        goto exit;
+    }
+
+    /* recv msg and exit */
     while(1) {
         bzero(buf, sizeof(buf));
         cnt = SSL_read(ssl, buf, sizeof(buf)-1);
@@ -226,6 +267,7 @@ int run_srv() {
             break;
         }
         logd("msg: %s", buf);
+        break;
     }
 
 exit:
