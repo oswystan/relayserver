@@ -192,6 +192,7 @@ int run_srv() {
     BIO* bio = NULL;
     EC_KEY* ecdh = NULL;
     srtp_err_status_t res;
+    rtp_header* header = NULL;
 
     if(0 != sec_env_init(1)) {
         return -1;
@@ -277,7 +278,9 @@ int run_srv() {
             break;
         }
         buf[len] = '\0';
+        header = (rtp_header*)buf;
         char* str = buf + sizeof(rtp_header);
+        logd("rtp ssrc: %d", ntohl(header->ssrc));
         logd("msg: %s", str);
         break;
     }
