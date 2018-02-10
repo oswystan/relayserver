@@ -384,8 +384,12 @@ int run_client() {
     }
 
     //send message to server
+    header->version = 2;
+    header->type = 96;
     header->ssrc = htonl(1234);
     header->csrccount = 0;
+    header->seq_number = 100;
+    header->timestamp = htonl(0x01020304);
     snprintf(data, sizeof(buf)-sizeof(rtp_header), "hello, world!!!!");
     logd("send: %s", data);
     len = strlen(data) + sizeof(rtp_header);
