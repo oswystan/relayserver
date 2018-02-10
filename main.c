@@ -26,6 +26,7 @@
 #include <srtp2/srtp.h>
 
 #include "log.h"
+#include "rtp.h"
 
 #define MASTER_KEY  16
 #define MASTER_SALT 14
@@ -45,6 +46,8 @@ static srtp_policy_t policy_remote;
 static srtp_policy_t policy_local;
 static srtp_t        stream_in;
 static srtp_t        stream_out;
+static unsigned char rtp_buf[4096];
+static unsigned char srtp_buf[4096];
 
 int udp_new_server() {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -179,8 +182,6 @@ int sec_env_init(int isserver) {
 void sec_env_uninit() {
     return;
 }
-
-
 int run_srv() {
     logfunc();
     int ret = 0;
@@ -261,12 +262,23 @@ int run_srv() {
     /* recv msg and exit */
     while(1) {
         bzero(buf, sizeof(buf));
-        cnt = SSL_read(ssl, buf, sizeof(buf)-1);
-        if(cnt == (size_t)-1 ) {
+        cnt = BIO_read(bio, buf, sizeof(buf));
+        /*cnt = SSL_read(ssl, buf, sizeof(buf)-1);*/
+
+        if(cnt == (size_t)-1) {
             loge("fail to recv data: %s", strerror(errno));
             break;
         }
-        logd("msg: %s", buf);
+
+        int len = cnt;
+        res = srtp_unprotect(stream_in, buf, &len);
+        if(res != srtp_err_status_ok) {
+            loge("fail to unprotect srtp: %d", res);
+            break;
+        }
+        buf[len] = '\0';
+        char* str = buf + sizeof(rtp_header);
+        logd("msg: %s", str);
         break;
     }
 
@@ -282,9 +294,16 @@ exit:
 int run_client() {
     logfunc();
     int ret = 0;
+    int len = 0;
     char buf[4096];
     unsigned char material[MASTER_LEN*2];
     srtp_err_status_t res;
+    BIO* bio = NULL;
+    unsigned char master_key[MASTER_LEN];
+    char* data = buf + sizeof(rtp_header);
+    rtp_header* header = (rtp_header*)buf;
+    struct sockaddr peer;
+    socklen_t peerlen = sizeof(peer);
 
     if(0 != sec_env_init(0)) {
         return -1;
@@ -294,6 +313,11 @@ int run_client() {
     EC_KEY* ecdh = NULL;
     if(fd < 0) return -1;
 
+    if (getsockname(fd, &peer, &peerlen) < 0) {
+        loge("fail to get sock addr: %s", strerror(errno));
+        goto exit;
+    }
+
     ssl = SSL_new(ssl_ctx);
     if(!ssl) {
         loge("fail to new ssl");
@@ -301,8 +325,14 @@ int run_client() {
     }
     SSL_set_ex_data(ssl, 0, NULL);
     SSL_set_info_callback(ssl, sec_info_callback);
-    SSL_set_fd(ssl, fd);
-    SSL_set_read_ahead(ssl, 1);
+    bio = BIO_new_dgram(fd, BIO_NOCLOSE);
+    if(!bio) {
+        loge("fail to new bio dgram");
+        goto exit;
+    }
+    BIO_ctrl_set_connected(bio, 1, &peer);
+    SSL_set_bio(ssl, bio, bio);
+    SSL_set_connect_state(ssl);
 
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if(!ecdh) {
@@ -312,11 +342,12 @@ int run_client() {
     SSL_set_options(ssl, SSL_OP_SINGLE_ECDH_USE);
     SSL_set_tmp_ecdh(ssl, ecdh);
     EC_KEY_free(ecdh);
+    SSL_set_read_ahead(ssl, 1);
 
     logd("starting handshake...");
     ret = SSL_connect(ssl);
     if(ret != 1) {
-        loge("fail to do SSL_connect: %d => %d", ret, SSL_get_error(ssl, ret));
+        loge("fail to do SSL_connect: %d %s", ret, ERR_error_string(SSL_get_error(ssl, ret), NULL));
         goto exit;
     }
     logd("handshake DONE.");
@@ -338,7 +369,6 @@ int run_client() {
     srtp_crypto_policy_set_rtp_default(&policy_local.rtp);
     srtp_crypto_policy_set_rtcp_default(&policy_local.rtcp);
     policy_local.ssrc.type = ssrc_any_inbound;
-    unsigned char master_key[MASTER_LEN];
     policy_local.key = master_key;
     policy_local.window_size = 128;
     policy_local.allow_repeat_tx = 0;
@@ -351,10 +381,19 @@ int run_client() {
     }
 
     //send message to server
-    snprintf(buf, sizeof(buf), "hello, world");
-    logd("send: %s", buf);
-    cnt = SSL_write(ssl, buf, strlen(buf));
+    header->ssrc = htonl(1234);
+    header->csrccount = 0;
+    snprintf(data, sizeof(buf)-sizeof(rtp_header), "hello, world!!!!");
+    logd("send: %s", data);
+    len = strlen(data) + sizeof(rtp_header);
+    res = srtp_protect(stream_out, buf, &len);
+    if(res != srtp_err_status_ok) {
+        loge("fail to protect data");
+        goto exit;
+    }
+    cnt = BIO_write(bio, buf, len);
     if(cnt == (size_t)-1) loge("fail to send: %s", strerror(errno));
+    logd("send data OK");
     close(fd);
 
 exit:
