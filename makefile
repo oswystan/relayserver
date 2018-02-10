@@ -11,7 +11,8 @@
 
 prog_dtls := dtls
 prog_main := a.out
-bin       := $(prog_dtls) $(prog_main)
+prog_srtp := srtp
+bin       := $(prog_dtls) $(prog_main) $(prog_srtp)
 cert      := cacert.pem cakey.pem
 cflags 	  := -I./thirdparty/srtp/include
 ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2
@@ -23,6 +24,9 @@ $(prog_main): main.o
 	$(h) gcc $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_dtls): dtls.o
+	$(h) gcc $^ -o $@ $(ld_flags)
+	@ echo "[gen] "$@
+$(prog_srtp): srtp.o
 	$(h) gcc $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 %.o:%.c
