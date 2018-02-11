@@ -20,7 +20,7 @@ h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
 
-$(prog_main): main.o
+$(prog_main): main.o stun.o
 	$(h) gcc $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_dtls): dtls.o

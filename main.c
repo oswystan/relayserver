@@ -102,7 +102,9 @@ int run_client() {
     char buf[4096];
     if(fd < 0) return -1;
 
-    sprintf(buf, "hello");
+    stun_message_t* req = stun_alloc_message();
+    if(!req) goto exit;
+
     ret = send(fd, buf, strlen(buf), 0);
     if(ret < 0) {
         loge("fail to send data.");
@@ -110,8 +112,9 @@ int run_client() {
         logd("send: %s", buf);
     }
 
-
-    close(fd);
+exit:
+    if(fd) close(fd);
+    if(req) stun_free_message(req);
     return 0;
 }
 
