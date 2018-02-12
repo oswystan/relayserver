@@ -140,7 +140,7 @@ int stun_add_attr(stun_message_t* msg, stun_attr_header* attr);
 int stun_set_method_and_class(stun_message_t* msg, uint16_t method, uint16_t cls);
 
 int stun_parse(stun_message_t* msg, char* buf, uint32_t len);
-int stun_serilize(stun_message_t* msg, char* buf, uint32_t* len);
+int stun_serialize(stun_message_t* msg, char* buf, uint32_t* len);
 
 #endif /*STUN_H_INCLUDED*/
 
