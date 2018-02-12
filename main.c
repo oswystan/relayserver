@@ -81,6 +81,7 @@ int run_srv() {
     char buf[4096];
     if(fd < 0) return -1;
 
+    stun_message_t* msg = stun_alloc_message();
     while(1) {
         bzero(buf, sizeof(buf));
         ret = recv(fd, buf, len, 0);
@@ -89,7 +90,8 @@ int run_srv() {
             break;
         }
         //handle data
-        logd("get msg.");
+        stun_parse(msg, buf, ret);
+        logd("get msg: %08x", msg->header->cookie);
     }
 
     close(fd);
@@ -100,16 +102,26 @@ int run_client() {
     int fd = udp_new_client();
     int ret = 0;
     char buf[4096];
+    uint32_t len = sizeof(buf);
     if(fd < 0) return -1;
 
     stun_message_t* req = stun_alloc_message();
     if(!req) goto exit;
+    stun_attr_xor_mapped_address_ipv4 addr;
+    struct in_addr inaddr;
+    addr.family = 0x01;
+    addr.port = 8080;
+    addr.header.type = XOR_MAPPED_ADDRESS;
+    addr.header.len  = sizeof(addr) - sizeof(addr.header);
+    inet_pton(AF_INET, "192.168.1.1", &inaddr);
+    addr.addr = inaddr.s_addr;
+    stun_serialize(req, buf, &len);
 
-    ret = send(fd, buf, strlen(buf), 0);
+    ret = send(fd, buf, len, 0);
     if(ret < 0) {
         loge("fail to send data.");
     } else {
-        logd("send: %s", buf);
+        logd("send: %d", len);
     }
 
 exit:

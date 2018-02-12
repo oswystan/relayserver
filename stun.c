@@ -181,6 +181,7 @@ int stun_serialize(stun_message_t* msg, char* buf, uint32_t* len) {
     if(*len < msg->used) {
         return -ENOMEM;
     }
+    *len = 0;
     memcpy(buf, msg->buf, msg->used);
 
     stun_header* header = (stun_header*)buf;
@@ -241,6 +242,7 @@ int stun_serialize(stun_message_t* msg, char* buf, uint32_t* len) {
         }
         ptr += reallen;
     }
+    *len = msg->used;
 
     return 0;
 }
