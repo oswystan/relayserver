@@ -10,13 +10,17 @@
  **************************************************************************************
  */
 
+#define LOG_TAG "stun"
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <openssl/rand.h>
+#include <zlib.h>
 #include "stun.h"
+#include "log.h"
 
 #define DEFAULT_SIZE 1024
+#define STUN_CRC32_FACTOR 0x5354554e
 
 static uint64_t stun_ntohll(uint64_t n) {
     if (__BYTE_ORDER == __LITTLE_ENDIAN) {
@@ -38,7 +42,7 @@ static uint64_t stun_htonll(uint64_t h) {
 stun_message_t* stun_alloc_message() {
     stun_message_t* msg = (stun_message_t*)malloc(sizeof(stun_message_t));
     if(msg) {
-        msg->buf = (char*)malloc(DEFAULT_SIZE);
+        msg->buf = (uint8_t*)malloc(DEFAULT_SIZE);
         if(!msg->buf) {
             free(msg);
             msg = NULL;
@@ -67,10 +71,10 @@ int stun_add_attr(stun_message_t* msg, stun_attr_header* attr) {
         return -EINVAL;
     }
 
-    uint16_t copylen = STUN_ALIGNED(attr->len);
+    uint16_t copylen = STUN_ALIGNED(attr->len) + sizeof(stun_attr_header);
     if(msg->len - msg->used < copylen) {
         /* NO enough buffer avaliable, then realloc the buffer */
-        char* buf = (char*)malloc(msg->len*2);
+        uint8_t* buf = (uint8_t*)malloc(msg->len*2);
         if(!buf) {
             return -ENOMEM;
         }
@@ -84,16 +88,29 @@ int stun_add_attr(stun_message_t* msg, stun_attr_header* attr) {
     msg->header->len += copylen;
     return 0;
 }
+stun_attr_header* stun_get_attr(stun_message_t* msg, uint16_t atype) {
+    if(!msg) return NULL;
+
+    uint8_t* ptr = msg->buf + sizeof(stun_header);
+    uint16_t reallen = 0;
+    while(ptr < msg->buf + msg->used) {
+        stun_attr_header* attr = (stun_attr_header*)ptr;
+        reallen = STUN_ALIGNED(attr->len);
+        if(attr->type == atype) return attr;
+        ptr = ptr + reallen + sizeof(stun_attr_header);
+    }
+    return NULL;
+}
 int stun_set_method_and_class(stun_message_t* msg, uint16_t method, uint16_t cls) {
     if(!msg || method != STUN_METHOD_BINDING) return -EINVAL;
     msg->header->type = (method | cls);
     return 0;
 }
 
-int stun_parse(stun_message_t* msg, char* buf, uint32_t len) {
+int stun_parse(stun_message_t* msg, uint8_t* buf, uint32_t len) {
     if(!msg || !buf || !len || len%4!=0) return -EINVAL;
     if(len >  msg->len) {
-        char* ptr = (char*)malloc(len);
+        uint8_t* ptr = (uint8_t*)malloc(len);
         if(!ptr) {
             return -ENOMEM;
         }
@@ -113,7 +130,7 @@ int stun_parse(stun_message_t* msg, char* buf, uint32_t len) {
     }
     header->len = ntohs(header->len);
 
-    char* ptr = msg->buf + sizeof(stun_header);
+    uint8_t* ptr = msg->buf + sizeof(stun_header);
     stun_attr_header* attr = NULL;
     while(ptr < msg->buf+msg->len) {
         attr = (stun_attr_header*)ptr;
@@ -123,16 +140,19 @@ int stun_parse(stun_message_t* msg, char* buf, uint32_t len) {
 
         switch(attr->type) {
             case USERNAME: {
+                logd("USERNAME");
                 break;
             };
-            case UNKNOWN: {
+            case WRTC_UNKNOWN: {
+                logd("WRTC_UNKNOWN");
                 stun_attr_unknown* a = (stun_attr_unknown*)attr;
-                for(uint16_t i=0; i<attr->len; i++) {
+                for(uint16_t i=0; i<(attr->len/2); i++) {
                     a->attrs[i] = ntohs(a->attrs[i]);
                 }
                 break;
             };
             case XOR_MAPPED_ADDRESS: {
+                logd("XOR_MAPPED_ADDRESS");
                 stun_attr_xor_mapped_address_ipv4* a = (stun_attr_xor_mapped_address_ipv4*)attr;
                 a->port = ntohs(a->port);
                 if(a->family == 0x01) {
@@ -141,37 +161,43 @@ int stun_parse(stun_message_t* msg, char* buf, uint32_t len) {
                 break;
             };
             case ICE_CONTROLLING: {
+                logd("ICE_CONTROLLING");
                 stun_attr_ice_controlling* a = (stun_attr_ice_controlling*)attr;
                 a->tiebreaker = stun_ntohll(a->tiebreaker);
                 break;
             };
             case USE_CANDIDATE: {
+                logd("USE_CANDIDATE");
                 break;
             };
             case PRIORITY: {
+                logd("PRIORITY");
                 stun_attr_priority* a = (stun_attr_priority*)attr;
                 a->priority = ntohl(a->priority);
                 break;
             };
             case MESSAGE_INTEGRITY: {
+                logd("MESSAGE_INTEGRITY");
                 break;
             };
             case FINGERPRINT: {
+                logd("FINGERPRINT");
                 stun_attr_fingerprint* a = (stun_attr_fingerprint*)attr;
                 a->crc32 = ntohl(a->crc32);
                 break;
             };
             default: {
+                logd("invalid type: 0x%02x", attr->type);
                 return -EBADMSG;
             }
         }
 
-        ptr += reallen;
+        ptr = ptr + reallen + sizeof(stun_attr_header);
     }
 
     return 0;
 }
-int stun_serialize(stun_message_t* msg, char* buf, uint32_t* len) {
+int stun_serialize(stun_message_t* msg, uint8_t* buf, uint32_t* len) {
     if(!msg || !len || *len == 0) return -EINVAL;
     if(!buf) {
         *len = msg->used;
@@ -187,65 +213,140 @@ int stun_serialize(stun_message_t* msg, char* buf, uint32_t* len) {
     stun_header* header = (stun_header*)buf;
     header->len = htons(header->len);
     header->cookie = htonl(header->cookie);
-    char* ptr = buf + sizeof(stun_header);
+    uint8_t* ptr = buf + sizeof(stun_header);
     stun_attr_header* attr = NULL;
     uint16_t reallen = 0;
+    uint16_t attrlen = 0;
+    uint16_t type = 0;
     while(ptr < buf + msg->used) {
         attr = (stun_attr_header*)ptr;
+        type = attr->type;
+        reallen = STUN_ALIGNED(attr->len);
+        attrlen = attr->len;
+
         attr->type = htons(attr->type);
         attr->len = htons(attr->len);
-        reallen = STUN_ALIGNED(attr->len);
 
-        switch(attr->type) {
+        switch(type) {
             case USERNAME: {
+                logd("USERNAME");
                 break;
             };
-            case UNKNOWN: {
+            case WRTC_UNKNOWN: {
+                logd("WRTC_UNKNOWN");
                 stun_attr_unknown* a = (stun_attr_unknown*)attr;
-                for(uint16_t i=0; i<attr->len; i++) {
+                for(uint16_t i=0; i<(attrlen/2); i++) {
                     a->attrs[i] = htons(a->attrs[i]);
                 }
                 break;
             };
             case XOR_MAPPED_ADDRESS: {
+                logd("XOR_MAPPED_ADDRESS");
                 stun_attr_xor_mapped_address_ipv4* a = (stun_attr_xor_mapped_address_ipv4*)attr;
-                a->port = htons(a->port);
+                a->port = htons(a->port ^ (STUN_COOKIE >> 16));
+                a->addr = htonl(a->addr ^ htonl(STUN_COOKIE));
                 if(a->family == 0x01) {
                     a->addr = htonl(a->addr);
                 }
                 break;
             };
             case ICE_CONTROLLING: {
+                logd("ICE_CONTROLLING");
                 stun_attr_ice_controlling* a = (stun_attr_ice_controlling*)attr;
                 a->tiebreaker = stun_htonll(a->tiebreaker);
                 break;
             };
             case USE_CANDIDATE: {
+                logd("USE_CANDIDATE");
                 break;
             };
             case PRIORITY: {
+                logd("PRIORITY");
                 stun_attr_priority* a = (stun_attr_priority*)attr;
                 a->priority = htonl(a->priority);
                 break;
             };
             case MESSAGE_INTEGRITY: {
+                logd("MESSAGE_INTEGRITY");
                 break;
             };
             case FINGERPRINT: {
+                logd("FINGERPRINT");
                 stun_attr_fingerprint* a = (stun_attr_fingerprint*)attr;
                 a->crc32 = htonl(a->crc32);
                 break;
             };
             default: {
+                loge("invalid type: 0x%02x @%p", attr->type, attr);
                 return -EBADMSG;
             }
         }
-        ptr += reallen;
+        ptr = ptr + sizeof(stun_attr_header) + reallen;
     }
     *len = msg->used;
 
     return 0;
 }
 
+static void hexdump(uint8_t* ptr, uint32_t cnt) {
+    if(!ptr || !cnt) return;
+    for(uint32_t i=0; i<cnt; i++, ptr++) {
+        if(i % 16 == 0) {
+            if(i != 0) log("\n");
+            log("%08x  ", i);
+        }
+        if(i % 8 == 0 && i % 16 != 0)
+            log(" %02x ", *ptr);
+        else
+            log("%02x ", *ptr);
+    }
+    log("\n");
+}
+uint32_t stun_calcute_crc32(stun_message_t* msg) {
+    return crc32(0, msg->buf, msg->used) ^ STUN_CRC32_FACTOR;
+}
+int stun_sha1_with_key(uint8_t* key, uint32_t keylen,
+                       uint8_t* data, uint32_t datalen,
+                       uint8_t* out, uint32_t outlen) {
+    return 0;
+}
+
+#if 0
+int main()
+{
+    const char* datafile = "stun.data";
+    char buf[1024];
+    char dst[1024];
+    int fsize = 0;
+    int ret = 0;
+    FILE* fp = fopen(datafile, "r");
+    if(!fp) {
+        loge("fail to open file: %s", datafile);
+        return -1;
+    }
+    fsize = fread(buf, 1, sizeof(buf), fp);
+    if(fsize < 0) {
+        loge("fail to read data:%s", strerror(errno));
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    stun_message_t* msg = stun_alloc_message();
+    ret = stun_parse(msg, (char*)buf, fsize);
+    logd("parse ret: %d", ret);
+    uint32_t len = sizeof(dst);
+    ret = stun_serialize(msg, dst, &len);
+    logd("serialize ret: %d", ret);
+    if((uint32_t)fsize != len) {
+        loge("incorrect length: %u!=%u", fsize, len);
+    } else if(memcmp(buf, dst, len) != 0) {
+        loge("buf != dst");
+        hexdump((uint8_t*)buf, len);
+        hexdump((uint8_t*)dst, len);
+    }
+
+    return 0;
+}
+#endif
 /********************************** END **********************************************/
 

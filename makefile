@@ -12,10 +12,11 @@
 prog_dtls := dtls
 prog_main := a.out
 prog_srtp := srtp
-bin       := $(prog_dtls) $(prog_main) $(prog_srtp)
+prog_stun := stunsrv
+bin       := $(prog_dtls) $(prog_main) $(prog_srtp) $(prog_stun)
 cert      := cacert.pem cakey.pem
 cflags 	  := -I./thirdparty/srtp/include
-ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2
+ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2 -lz
 h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
@@ -27,6 +28,9 @@ $(prog_dtls): dtls.o
 	$(h) gcc $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_srtp): srtp.o
+	$(h) gcc $^ -o $@ $(ld_flags)
+	@ echo "[gen] "$@
+$(prog_stun): stunsrv.o stun.o
 	$(h) gcc $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 %.o:%.c
