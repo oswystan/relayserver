@@ -26,7 +26,7 @@
 #define STUN_ALIGNED(x) ((x+3)/4*4)
 
 enum stun_method {
-    STUN_METHOD_BINDING = 0x1,
+    STUN_METHOD_BINDING = 0x0001,
 };
 enum stun_class {
     STUN_REQUEST        = 0x0000,
@@ -62,13 +62,7 @@ enum stun_attr_type {
 };
 
 typedef struct __packed stun_header {
-#if __BYTE_ORDER == __BIG_ENDIAN
-    uint16_t zero:2;
-    uint16_t type:14;
-#elif __BYTE_ORDER == __LITTLE_ENDIAN
-    uint16_t type:14;
-    uint16_t zero:2;
-#endif
+    uint16_t type;
     uint16_t len;           /* length of the message not including the header aligned by 4 bytes */
     uint32_t cookie;        /* fixed to 0x2112A442 according to the protocol */
     uint8_t  trans_id[12];  /* unique id */

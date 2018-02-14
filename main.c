@@ -63,7 +63,7 @@ int udp_new_server() {
 int is_stun(char* buf, int32_t len) {
     if(!buf || !len) return -EINVAL;
     stun_header* header = (stun_header*)buf;
-    if(header->cookie == ntohl(STUN_COOKIE) && header->zero == 0) return 1;
+    if(header->cookie == ntohl(STUN_COOKIE)) return 1;
     return 0;
 }
 int is_rtp(char* buf, int32_t len) {
@@ -84,8 +84,11 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     status |= STUN_MSG_RECEIVED;
     stun_message_t* req = stun_alloc_message();
     stun_message_t* resp = stun_alloc_message();
-    if(!req) loge("no memory for req");
-    if(!resp) loge("no memory for resp");
+    stun_message_t* ind = stun_alloc_message();
+    if(!req || !resp || !ind) {
+        loge("fail to allocate message: %p %p %p", req, resp, ind);
+        return;
+    }
     stun_parse(req, buf, len);
     stun_set_method_and_class(resp, STUN_METHOD_BINDING, STUN_SUCC_RESPONSE);
     memcpy(resp->header->trans_id, req->header->trans_id, sizeof(resp->header->trans_id));
@@ -121,6 +124,13 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     fp.crc32 = stun_calculate_crc32(resp);
     stun_add_attr(resp, &fp.header);
 
+    //indication message to client
+    stun_set_method_and_class(ind, STUN_METHOD_BINDING, STUN_INDICATION);
+    fp.header.type = FINGERPRINT;
+    fp.header.len = 4;
+    fp.crc32 = stun_calculate_crc32(ind);
+    stun_add_attr(ind, &fp.header);
+
     if(fd) {
         uint8_t content[1024];
         uint32_t size = sizeof(content);
@@ -131,10 +141,19 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
             logd("send: %d", size);
             sendto(fd, content, size, 0, addr, socklen);
         }
+
+        size = sizeof(content);
+        ret = stun_serialize(ind, content, &size);
+        if(ret < 0) {
+            loge("fail to serialize indication message: %d", ret);
+        } else {
+            sendto(fd, content, size, 0, addr, socklen);
+        }
     }
 
     stun_free_message(resp);
     stun_free_message(req);
+    stun_free_message(ind);
 }
 void handle_rtp(char* buf, int32_t len) {
     logfunc();
