@@ -15,11 +15,13 @@
 #include <errno.h>
 #include <string.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <zlib.h>
 #include "stun.h"
 #include "log.h"
 
-#define DEFAULT_SIZE 1024
+#define DEFAULT_SIZE  1024
+#define STUN_BLK_SIZE 64
 #define STUN_CRC32_FACTOR 0x5354554e
 
 static uint64_t stun_ntohll(uint64_t n) {
@@ -302,12 +304,47 @@ static void hexdump(uint8_t* ptr, uint32_t cnt) {
     }
     log("\n");
 }
-uint32_t stun_calcute_crc32(stun_message_t* msg) {
+uint32_t stun_calculate_crc32(stun_message_t* msg) {
     return crc32(0, msg->buf, msg->used) ^ STUN_CRC32_FACTOR;
 }
-int stun_sha1_with_key(uint8_t* key, uint32_t keylen,
-                       uint8_t* data, uint32_t datalen,
-                       uint8_t* out, uint32_t outlen) {
+int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen, uint8_t* out) {
+    if(!msg || !key || !out || !keylen) return -EINVAL;
+
+    if(keylen > STUN_BLK_SIZE) {
+        loge("unimplemented feature.");
+        return -ENOSYS;
+    }
+    // serialize the data first
+    uint8_t buf[1024];
+    memset(buf, 0x00, sizeof(buf));
+    memset(out, 0x00, 20);
+    uint32_t len = sizeof(buf);
+    stun_serialize(msg, buf, &len);
+
+    // calculate sha1 according to rfc2104
+    uint8_t ipad[STUN_BLK_SIZE], opad[STUN_BLK_SIZE], newkey[STUN_BLK_SIZE];
+    uint8_t sha1[20];
+    memset(ipad, 0x00, sizeof(ipad));
+    memset(opad, 0x00, sizeof(opad));
+    memset(newkey, 0x00, sizeof(newkey));
+    memcpy(newkey, key, keylen);
+    memset(sha1, 0x00, sizeof(sha1));
+    for(int i=0; i<STUN_BLK_SIZE; i++) {
+        ipad[i] = 0x5c ^ newkey[i];
+        opad[i] = 0x36 ^ newkey[i];
+    }
+
+    SHA_CTX ctx;
+    SHA1_Init(&ctx);
+    SHA1_Update(&ctx, ipad, sizeof(ipad));
+    SHA1_Update(&ctx, buf, len);
+    SHA1_Final(sha1, &ctx);
+
+    SHA1_Init(&ctx);
+    SHA1_Update(&ctx, opad, sizeof(opad));
+    SHA1_Update(&ctx, sha1, sizeof(sha1));
+    SHA1_Final(out, &ctx);
+
     return 0;
 }
 

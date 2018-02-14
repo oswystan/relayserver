@@ -107,12 +107,15 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     integrity.header.type = MESSAGE_INTEGRITY;
     integrity.header.len  = 20;
     uint8_t sha1[20];    //TODO
+    uint8_t key[] = "password";
+    stun_calculate_integrity(resp, key, sizeof(key), sha1);
     memcpy(integrity.sha1, sha1, sizeof(sha1));
+    stun_add_attr(resp, &integrity.header);
 
     stun_attr_fingerprint fp;
     fp.header.type = FINGERPRINT;
     fp.header.len = 4;
-    fp.crc32 = stun_calcute_crc32(resp);
+    fp.crc32 = stun_calculate_crc32(resp);
     stun_add_attr(resp, &fp.header);
 
     if(fd) {
