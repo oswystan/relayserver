@@ -36,6 +36,8 @@
 uint16_t srv_port = 8881;
 uint16_t cli_port = 8882;
 const char* srv_ip = "192.168.1.102";
+char password[64];
+char username[64];
 
 #define STUN_MSG_RECEIVED 0x01
 #define HANDSHAKE_SUCC    0x02
@@ -78,6 +80,28 @@ int is_rtcp(char* buf, int32_t len) {
     if(header->type >= 64 || header->type < 96) return 1;
     return 0;
 }
+int is_password(char* buf, int32_t len) {
+    if(!buf || !len) return -EINVAL;
+    uint32_t* magic = (uint32_t*)buf;
+    if(*magic == 0xabcdabcd) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+void handle_password(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
+    logfunc();
+    if(!buf || !len || fd < 0 || !addr || !socklen) return;
+    char* un = (char*)(buf + sizeof(uint32_t));
+    char* pwd = un + sizeof(username);
+
+    memset(username, 0x00, sizeof(username));
+    memset(password, 0x00, sizeof(password));
+    strcpy(username, un);
+    strcpy(password, pwd);
+    logd("get password:[%s]", pwd);
+    logd("get username:[%s]", username);
+}
 
 void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
@@ -93,12 +117,20 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     stun_set_method_and_class(resp, STUN_METHOD_BINDING, STUN_SUCC_RESPONSE);
     memcpy(resp->header->trans_id, req->header->trans_id, sizeof(resp->header->trans_id));
 
-    stun_attr_header* attr = stun_get_attr(req, USERNAME);
-    if(!attr) {
-        loge("can not find username in request");
-        return;
-    }
-    stun_add_attr(resp, attr);
+    /*stun_attr_header* attr = stun_get_attr(req, USERNAME);*/
+    /*if(!attr) {                                           */
+    /*    loge("can not find username in request");         */
+    /*    return;                                           */
+    /*}                                                     */
+    /*stun_add_attr(resp, attr);                            */
+    int ulen = STUN_ALIGNED(strlen(username));
+    stun_attr_username* usrname = (stun_attr_username*)malloc(sizeof(stun_attr_username) + ulen);
+    usrname->header.type = USERNAME;
+    usrname->header.len = strlen(username);
+    memset(usrname->username, 0x00, ulen);
+    strcpy(usrname->username, username);
+    stun_add_attr(resp, &usrname->header);
+    free(usrname);
 
     struct sockaddr_in* addrin = (struct sockaddr_in*)addr;
     stun_attr_xor_mapped_address_ipv4 ipv4;
@@ -113,8 +145,8 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     integrity.header.type = MESSAGE_INTEGRITY;
     integrity.header.len  = 20;
     uint8_t sha1[20];
-    uint8_t key[] = "password"; //TODO get password from webrtc
-    stun_calculate_integrity(resp, key, sizeof(key), sha1);
+    /*uint8_t key[] = "password"; //TODO get password from webrtc*/
+    stun_calculate_integrity(resp, (uint8_t*)password, strlen(password), sha1);
     memcpy(integrity.sha1, sha1, sizeof(sha1));
     stun_add_attr(resp, &integrity.header);
 
@@ -182,6 +214,8 @@ int run_srv() {
         }
         if(is_stun(buf, ret)) {
             handle_stun((uint8_t*)buf, ret, fd, &fromaddr, socklen);
+        } else if(is_password(buf, ret)) {
+            handle_password((uint8_t*)buf, ret, fd, &fromaddr, socklen);
         }
         if(status == NORMAL_STATUS) {
             if(is_rtp(buf, ret)) {
