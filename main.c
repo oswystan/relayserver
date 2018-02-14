@@ -94,13 +94,15 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
         return;
     }
 
+    struct sockaddr_in* addrin = (struct sockaddr_in*)addr;
+
     stun_add_attr(resp, attr);
     stun_attr_xor_mapped_address_ipv4 ipv4;
     ipv4.header.type = XOR_MAPPED_ADDRESS;
     ipv4.header.len  = 8;
     ipv4.family  = 0x01;
-    ipv4.addr  = inet_addr(srv_ip);
-    ipv4.port  = srv_port;
+    ipv4.addr  = addrin->sin_addr.s_addr;
+    ipv4.port  = ntohs(addrin->sin_port);
     stun_add_attr(resp, &ipv4.header);
 
     stun_attr_message_integrity integrity;
