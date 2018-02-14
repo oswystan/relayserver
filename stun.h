@@ -42,9 +42,9 @@ enum stun_attr_type {
     CHANGE_ADDRESS,
     SOURCE_ADDRESS,
     CHANGED_ADDRESS,
-    USERNAME,
+    USERNAME,               //0x06
     PASSWORD,
-    MESSAGE_INTEGRITY,
+    MESSAGE_INTEGRITY,      //0x08
     ERROR_CODE,
     UNKNOWN,
     REFLECTED_FROM,

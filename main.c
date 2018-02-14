@@ -84,6 +84,8 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     status |= STUN_MSG_RECEIVED;
     stun_message_t* req = stun_alloc_message();
     stun_message_t* resp = stun_alloc_message();
+    if(!req) loge("no memory for req");
+    if(!resp) loge("no memory for resp");
     stun_parse(req, buf, len);
     stun_set_method_and_class(resp, STUN_METHOD_BINDING, STUN_SUCC_RESPONSE);
     memcpy(resp->header->trans_id, req->header->trans_id, sizeof(resp->header->trans_id));
@@ -93,10 +95,9 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
         loge("can not find username in request");
         return;
     }
+    stun_add_attr(resp, attr);
 
     struct sockaddr_in* addrin = (struct sockaddr_in*)addr;
-
-    stun_add_attr(resp, attr);
     stun_attr_xor_mapped_address_ipv4 ipv4;
     ipv4.header.type = XOR_MAPPED_ADDRESS;
     ipv4.header.len  = 8;
@@ -108,8 +109,8 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     stun_attr_message_integrity integrity;
     integrity.header.type = MESSAGE_INTEGRITY;
     integrity.header.len  = 20;
-    uint8_t sha1[20];    //TODO
-    uint8_t key[] = "password";
+    uint8_t sha1[20];
+    uint8_t key[] = "password"; //TODO get password from webrtc
     stun_calculate_integrity(resp, key, sizeof(key), sha1);
     memcpy(integrity.sha1, sha1, sizeof(sha1));
     stun_add_attr(resp, &integrity.header);
@@ -131,6 +132,9 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
             sendto(fd, content, size, 0, addr, socklen);
         }
     }
+
+    stun_free_message(resp);
+    stun_free_message(req);
 }
 void handle_rtp(char* buf, int32_t len) {
     logfunc();
