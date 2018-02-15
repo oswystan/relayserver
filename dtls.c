@@ -236,6 +236,14 @@ int run_client() {
     logfunc();
     int ret = 0;
     char buf[4096];
+    BIO* ioread = NULL;
+    BIO* iowrite = NULL;
+    ioread = BIO_new(BIO_s_mem());
+    iowrite = BIO_new(BIO_s_mem());
+    if(!ioread || !iowrite) {
+        loge("fail to allocate io mem");
+        return -1;
+    }
 
     if(0 != sec_env_init(0)) {
         return -1;
@@ -252,7 +260,7 @@ int run_client() {
     }
     SSL_set_ex_data(ssl, 0, NULL);
     SSL_set_info_callback(ssl, sec_info_callback);
-    SSL_set_fd(ssl, fd);
+    SSL_set_bio(ssl, ioread, iowrite);
     SSL_set_read_ahead(ssl, 1);
 
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
@@ -265,12 +273,29 @@ int run_client() {
     EC_KEY_free(ecdh);
 
     logd("starting handshake...");
-    ret = SSL_connect(ssl);
-    if(ret != 1) {
-        loge("fail to do SSL_connect: %d => %d", ret, SSL_get_error(ssl, ret));
-        goto exit;
-    }
-    logd("handshake DONE.");
+    SSL_set_connect_state(ssl);
+    do {
+        ret = SSL_do_handshake(ssl);
+        logd("do handshake: %d", ret);
+        int err = SSL_get_error(ssl, ret);
+        if(err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            ret = 0;
+        }
+        while(BIO_ctrl_pending(iowrite) > 0) {
+            int cnt = BIO_read(iowrite, buf, sizeof(buf));
+            if(cnt > 0) {
+                send(fd, buf, cnt, 0);
+            }
+        }
+        if(err == SSL_ERROR_WANT_READ) {
+            int cnt = recv(fd, buf, sizeof(buf), 0);
+            if(cnt > 0) {
+                BIO_write(ioread,  buf, cnt);
+            }
+        }
+    }while(ret == 0);
+
+    logd("handshake DONE. with %d", ret);
 
     //send message to server
     snprintf(buf, sizeof(buf), "hello, world");
