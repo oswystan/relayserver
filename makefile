@@ -21,23 +21,23 @@ h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
 
-$(prog_main): main.o stun.o
-	$(h) gcc $^ -o $@ $(ld_flags)
+$(prog_main): main.o stun.o bio.o
+	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_dtls): dtls.o
-	$(h) gcc $^ -o $@ $(ld_flags)
+	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_srtp): srtp.o
-	$(h) gcc $^ -o $@ $(ld_flags)
+	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_stun): stunsrv.o stun.o
-	$(h) gcc $^ -o $@ $(ld_flags)
+	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 %.o:%.c
-	$(h) gcc -c -g $(cflags) $< -o $@
+	$(h) g++ -c -g $(cflags) $< -o $@
 	@ echo "[ cc] "$@
 %.o:%.cpp
-	$(h) g++ -c $< -o $@
+	$(h) g++ -c -g $(cflags) $< -o $@
 	@ echo "[cpp] "$@
 $(cert):
 	$(h) openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -keyout $(word 2,$(cert)) -out $(word 1,$(cert)) \

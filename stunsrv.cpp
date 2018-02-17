@@ -90,7 +90,7 @@ int run_srv() {
             break;
         }
         //handle data
-        stun_parse(msg, buf, ret);
+        stun_parse(msg, (uint8_t*)buf, ret);
         logd("get msg: %08x", msg->header->cookie);
     }
 
@@ -115,7 +115,7 @@ int run_client() {
     addr.header.len  = sizeof(addr) - sizeof(addr.header);
     inet_pton(AF_INET, "192.168.1.1", &inaddr);
     addr.addr = inaddr.s_addr;
-    stun_serialize(req, buf, &len);
+    stun_serialize(req, (uint8_t*)buf, &len);
 
     ret = send(fd, buf, len, 0);
     if(ret < 0) {

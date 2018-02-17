@@ -19,6 +19,7 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <srtp2/srtp.h>
 
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
@@ -159,6 +160,9 @@ int sec_env_init(int isserver) {
     SSL_CTX_set_read_ahead(ssl_ctx, 1);
     SSL_CTX_set_cipher_list(ssl_ctx, "ALL:NULL:eNULL:aNULL");
     SSL_CTX_set_tlsext_use_srtp(ssl_ctx, "SRTP_AES128_CM_SHA1_80");
+    if(0 != srtp_init()) {
+        loge("srtp init failed");
+    }
 
     logi("secure env setup ok.");
     return 0;
@@ -244,6 +248,8 @@ int run_client() {
         loge("fail to allocate io mem");
         return -1;
     }
+    BIO_set_mem_eof_return(ioread, -1);
+    BIO_set_mem_eof_return(iowrite, -1);
 
     if(0 != sec_env_init(0)) {
         return -1;
@@ -320,7 +326,4 @@ int main(int argc, const char *argv[]) {
     return usage(argv[0]);
 }
 
-
-
 /********************************** END **********************************************/
-
