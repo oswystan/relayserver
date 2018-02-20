@@ -139,8 +139,8 @@ int stun_set_method_and_class(stun_message_t* msg, uint16_t method, uint16_t cls
 int stun_parse(stun_message_t* msg, uint8_t* buf, uint32_t len);
 int stun_serialize(stun_message_t* msg, uint8_t* buf, uint32_t* len);
 
-uint32_t stun_calculate_crc32(stun_message_t* msg);
-int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen, uint8_t* out);
+int stun_calculate_crc32(stun_message_t* msg);
+int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen);
 
 #endif /*STUN_H_INCLUDED*/
 

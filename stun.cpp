@@ -16,6 +16,7 @@
 #include <string.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <zlib.h>
 #include "stun.h"
 #include "log.h"
@@ -274,6 +275,7 @@ int stun_serialize(stun_message_t* msg, uint8_t* buf, uint32_t* len) {
                 }
                 break;
             };
+            case ICE_CONTROLLED:
             case ICE_CONTROLLING: {
                 /*logd("serialize: ICE_CONTROLLING");*/
                 stun_attr_ice_controlling* a = (stun_attr_ice_controlling*)attr;
@@ -313,24 +315,37 @@ int stun_serialize(stun_message_t* msg, uint8_t* buf, uint32_t* len) {
     return 0;
 }
 
-uint32_t stun_calculate_crc32(stun_message_t* msg) {
-    return crc32(0, msg->buf, msg->used) ^ STUN_CRC32_FACTOR;
-}
-int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen, uint8_t* out) {
-    if(!msg || !key || !out || !keylen) return -EINVAL;
-
-    if(keylen > STUN_BLK_SIZE) {
-        loge("unimplemented feature.");
-        return -ENOSYS;
+int stun_get_buf(stun_message_t* msg, uint16_t type, uint8_t* out, uint32_t* len) {
+    stun_attr_header* attr = stun_get_attr(msg, type);
+    if(!attr) {
+        return -EINVAL;
     }
-    // serialize the data first
-    uint8_t buf[1024];
-    memset(buf, 0x00, sizeof(buf));
-    memset(out, 0x00, 20);
-    uint32_t len = sizeof(buf);
-    stun_serialize(msg, buf, &len);
+    uint8_t buf[4096];
+    uint32_t buflen = sizeof(buf);
+    int ret = stun_serialize(msg, buf, &buflen);
+    if(ret != 0) return ret;
 
-    // calculate sha1 according to rfc2104
+    stun_header* header = (stun_header*)buf;
+    uint32_t size = (uint8_t*)attr - msg->buf;
+    header->len = htons(size - sizeof(stun_header) + sizeof(stun_attr_header) + STUN_ALIGNED(attr->len));
+    memcpy(out, buf, size);
+    *len = size;
+}
+int stun_calculate_crc32(stun_message_t* msg) {
+    stun_attr_fingerprint* attr = (stun_attr_fingerprint*)stun_get_attr(msg, FINGERPRINT);
+    if(!attr) return -EINVAL;
+
+    uint8_t buf[1024];
+    uint32_t len = sizeof(buf);
+    stun_get_buf(msg, FINGERPRINT, buf, &len);
+    attr->crc32 = crc32(0, buf, len) ^ STUN_CRC32_FACTOR;
+    return 0;
+}
+
+int calculate_sha1(uint8_t* in, uint32_t inlen, uint8_t* key, uint32_t keylen, uint8_t* out) {
+    if(!in ||!inlen || !key || !out || !keylen) return -EINVAL;
+    logd("calculate_sha1: %u %u", inlen, keylen);
+
     uint8_t ipad[STUN_BLK_SIZE], opad[STUN_BLK_SIZE], newkey[STUN_BLK_SIZE];
     uint8_t sha1[20];
     memset(ipad, 0x00, sizeof(ipad));
@@ -339,20 +354,36 @@ int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen,
     memcpy(newkey, key, keylen);
     memset(sha1, 0x00, sizeof(sha1));
     for(int i=0; i<STUN_BLK_SIZE; i++) {
-        ipad[i] = 0x5c ^ newkey[i];
-        opad[i] = 0x36 ^ newkey[i];
+        opad[i] = 0x5c ^ newkey[i];
+        ipad[i] = 0x36 ^ newkey[i];
     }
-
     SHA_CTX ctx;
     SHA1_Init(&ctx);
     SHA1_Update(&ctx, ipad, sizeof(ipad));
-    SHA1_Update(&ctx, buf, len);
+    SHA1_Update(&ctx, in, inlen);
     SHA1_Final(sha1, &ctx);
 
     SHA1_Init(&ctx);
     SHA1_Update(&ctx, opad, sizeof(opad));
     SHA1_Update(&ctx, sha1, sizeof(sha1));
     SHA1_Final(out, &ctx);
+    return 0;
+}
+int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen) {
+    if(!msg || !key || !keylen) return -EINVAL;
+
+    if(keylen > STUN_BLK_SIZE) {
+        loge("unimplemented feature.");
+        return -ENOSYS;
+    }
+
+    // serialize the data first
+    uint8_t buf[1024];
+    uint32_t len = sizeof(buf);
+    stun_attr_message_integrity* attr = (stun_attr_message_integrity*)stun_get_attr(msg, MESSAGE_INTEGRITY);
+    if(!attr) return -EINVAL;
+    stun_get_buf(msg, MESSAGE_INTEGRITY, buf, &len);
+    calculate_sha1(buf, len, key, keylen, attr->sha1);
 
     return 0;
 }
@@ -360,7 +391,7 @@ int stun_calculate_integrity(stun_message_t* msg, uint8_t* key, uint32_t keylen,
 #if 0
 int main()
 {
-    const char* datafile = "stun.data";
+    const char* datafile = "stun.request";
     char buf[1024];
     char dst[1024];
     int fsize = 0;
@@ -378,10 +409,11 @@ int main()
     }
     fclose(fp);
     stun_message_t* msg = stun_alloc_message();
-    ret = stun_parse(msg, (char*)buf, fsize);
+    ret = stun_parse(msg, (uint8_t*)buf, fsize);
     logd("parse ret: %d", ret);
+
     uint32_t len = sizeof(dst);
-    ret = stun_serialize(msg, dst, &len);
+    ret = stun_serialize(msg, (uint8_t*)dst, &len);
     logd("serialize ret: %d", ret);
     if((uint32_t)fsize != len) {
         loge("incorrect length: %u!=%u", fsize, len);
@@ -389,6 +421,38 @@ int main()
         loge("buf != dst");
         hexdump((uint8_t*)buf, len);
         hexdump((uint8_t*)dst, len);
+    }
+
+    uint8_t fpbuf[1024];
+    uint8_t integritybuf[1024];
+    uint32_t outlen = sizeof(fpbuf);
+
+    stun_attr_header* attr = NULL;
+    attr = stun_get_attr(msg, FINGERPRINT);
+    if(attr) {
+        stun_attr_fingerprint* fp = (stun_attr_fingerprint*)attr;
+        logd("fp=%08x", fp->crc32);
+    }
+    stun_get_buf(msg, FINGERPRINT, fpbuf, &outlen);
+    logd("outlen=%u", outlen);
+    uint32_t rst = crc32(0, fpbuf, outlen) ^ STUN_CRC32_FACTOR;
+    logd("calculated fp=%08x", rst);
+
+    stun_get_buf(msg, MESSAGE_INTEGRITY, integritybuf, &outlen);
+    attr = stun_get_attr(msg, MESSAGE_INTEGRITY);
+    if(attr) {
+        stun_attr_message_integrity* integrity = (stun_attr_message_integrity*)attr;
+        hexdump(integrity->sha1, 20);
+    }
+    uint8_t sha1[20];
+    memset(sha1, 0x00, sizeof(sha1));
+    //uint8_t key[] = "BJp/UDVlcIEWecVeBWTw+8Pu";
+    uint8_t key[] = "0pXkZeRzvMuO7ID0ZVCU+K";
+    ret = calculate_sha1(integritybuf, outlen, key, sizeof(key)-1, sha1);
+    if(ret != 0) {
+        loge("fail to calculate sha1: %d", ret);
+    } else {
+        hexdump(sha1, 20);
     }
 
     return 0;

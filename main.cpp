@@ -25,6 +25,9 @@
 #include <openssl/err.h>
 #include <srtp2/srtp.h>
 
+#include <string>
+using namespace std;
+
 #include "log.h"
 #include "stun.h"
 #include "rtp.h"
@@ -58,6 +61,15 @@ char username[64];
 #define HANDSHAKE_SUCC    0x04
 #define NORMAL_STATUS     (STUN_MSG_RECEIVED|HANDSHAKE_SUCC)
 uint32_t status = 0;
+
+class IceCoreCfg {
+public:
+    string localusername;
+    string localpassword;;
+    string remoteusername;
+    string remotepassword;;
+};
+IceCoreCfg ice;
 
 int udp_new_server() {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -204,15 +216,23 @@ int is_password(char* buf, int32_t len) {
 void handle_password(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
     if(!buf || !len || fd < 0 || !addr || !socklen) return;
-    char* un = (char*)(buf + sizeof(uint32_t));
-    char* pwd = un + sizeof(username);
+    char* ptr = (char*)(buf + sizeof(uint32_t));
 
-    memset(username, 0x00, sizeof(username));
-    memset(password, 0x00, sizeof(password));
-    strcpy(username, un);
-    strcpy(password, pwd);
-    logd("get password:[%s]", pwd);
-    logd("get username:[%s]", username);
+    ice.localusername = ptr;
+    ptr += 64;
+    ice.localpassword = ptr;
+    ptr += 64;
+    ice.remoteusername = ptr;
+    ptr += 64;
+    ice.remotepassword = ptr;
+    logd("ice: [%s][%s][%s][%s]", ice.localusername.c_str(), \
+                                ice.localpassword.c_str(),
+                                ice.remoteusername.c_str(),
+                                ice.remotepassword.c_str());
+    string lu = ice.localusername;
+    string ru = ice.remoteusername;
+    ice.localusername = ru + ":" + ice.localusername;
+    ice.remoteusername = lu + ":" + ice.remoteusername;
 }
 void handle_dtls(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
@@ -244,93 +264,86 @@ void handle_dtls(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     return;
 }
 
-void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
-    logfunc();
-    status |= STUN_MSG_RECEIVED;
+void send_stun_requst(int fd, struct sockaddr* addr, socklen_t socklen) {
+    static int sended = 0;
+    if(sended) return;
+    sended = 1;
+    if(fd < 0 || !addr || !socklen) return;
     stun_message_t* req = stun_alloc_message();
-    stun_message_t* resp = stun_alloc_message();
-    stun_message_t* ind = stun_alloc_message();
-    if(!req || !resp || !ind) {
-        loge("fail to allocate message: %p %p %p", req, resp, ind);
-        return;
-    }
-    stun_parse(req, buf, len);
-    if(req->header->type == (STUN_REQUEST | STUN_METHOD_BINDING)) {
-        stun_free_message(req);
-        stun_free_message(resp);
-        stun_free_message(ind);
-        logd("get bind response. ");
-        return;
-    }
-    stun_set_method_and_class(resp, STUN_METHOD_BINDING, STUN_SUCC_RESPONSE);
-    memcpy(resp->header->trans_id, req->header->trans_id, sizeof(resp->header->trans_id));
+    stun_set_method_and_class(req, STUN_METHOD_BINDING, STUN_REQUEST);
 
-    int ulen = STUN_ALIGNED(strlen(username));
-    stun_attr_username* usrname = (stun_attr_username*)malloc(sizeof(stun_attr_username) + ulen);
-    usrname->header.type = USERNAME;
-    usrname->header.len = strlen(username);
-    memset(usrname->username, 0x00, ulen);
-    strcpy(usrname->username, username);
-    stun_add_attr(resp, &usrname->header);
-    free(usrname);
+    int ulen = STUN_ALIGNED(ice.localusername.size());
+    stun_attr_username* username = (stun_attr_username*)malloc(sizeof(stun_attr_username) + ulen);
+    username->header.type = USERNAME;
+    username->header.len = ice.localusername.size();
+    memset(username->username, 0x00, ulen);
+    strcpy(username->username, ice.localusername.c_str());
+    stun_add_attr(req, &username->header);
+    free(username);
 
-    struct sockaddr_in* addrin = (struct sockaddr_in*)addr;
-    stun_attr_xor_mapped_address_ipv4 ipv4;
-    ipv4.header.type = XOR_MAPPED_ADDRESS;
-    ipv4.header.len  = 8;
-    ipv4.family  = 0x01;
-    ipv4.addr  = addrin->sin_addr.s_addr;
-    ipv4.port  = ntohs(addrin->sin_port);
-    stun_add_attr(resp, &ipv4.header);
+    stun_attr_ice_controlling ice_controlled;
+    ice_controlled.header.type = ICE_CONTROLLED;
+    ice_controlled.header.len = 8;
+    ice_controlled.tiebreaker = 0x1d23f31232ecdde4;
+    stun_add_attr(req, &ice_controlled.header);
+
+    stun_attr_priority priority;
+    priority.header.type = PRIORITY;
+    priority.header.len  = 4;
+    priority.priority    = 5;
+    stun_add_attr(req, &priority.header);
 
     stun_attr_message_integrity integrity;
     integrity.header.type = MESSAGE_INTEGRITY;
     integrity.header.len  = 20;
-    uint8_t sha1[20];
-    /*uint8_t key[] = "password"; //TODO get password from webrtc*/
-    stun_calculate_integrity(resp, (uint8_t*)password, strlen(password), sha1);
-    memcpy(integrity.sha1, sha1, sizeof(sha1));
-    stun_add_attr(resp, &integrity.header);
+    stun_add_attr(req, &integrity.header);
+    stun_calculate_integrity(req, (uint8_t*)ice.remotepassword.c_str(), ice.remotepassword.size());
 
-    stun_attr_fingerprint fp;
-    fp.header.type = FINGERPRINT;
-    fp.header.len = 4;
-    fp.crc32 = stun_calculate_crc32(resp);
-    stun_add_attr(resp, &fp.header);
+    stun_attr_fingerprint fringerprint;
+    fringerprint.header.type = FINGERPRINT;
+    fringerprint.header.len  = 4;
+    stun_add_attr(req, &fringerprint.header);
+    stun_calculate_crc32(req);
+
+    uint8_t buf[4096];
+    uint32_t len = sizeof(buf);
+    stun_serialize(req, buf, &len);
+    sendto(fd, buf, len, 0, addr, socklen);
+}
+void send_stun_indication(int fd, struct sockaddr* addr, socklen_t socklen) {
+    logfunc();
+    if(fd < 0 || !addr || !socklen) return;
+    stun_message_t* ind = stun_alloc_message();
+    if(!ind) {
+        loge("fail to alloc ind");
+        return;
+    }
 
     //indication message to client
+    stun_attr_fingerprint fp;
     stun_set_method_and_class(ind, STUN_METHOD_BINDING, STUN_INDICATION);
     fp.header.type = FINGERPRINT;
     fp.header.len = 4;
     fp.crc32 = stun_calculate_crc32(ind);
     stun_add_attr(ind, &fp.header);
 
-    if(fd) {
-        uint8_t content[1024];
-        uint32_t size = sizeof(content);
-        int ret = stun_serialize(resp, content, &size);
-        if(ret < 0) {
-            loge("fail to serialize resp: %d", ret);
-        } else {
-            logd("send stun: %d", size);
-            sendto(fd, content, size, 0, addr, socklen);
-        }
-
-        size = sizeof(content);
-        ret = stun_serialize(ind, content, &size);
-        if(ret < 0) {
-            loge("fail to serialize indication message: %d", ret);
-        } else {
-            sendto(fd, content, size, 0, addr, socklen);
-        }
+    uint32_t size = 0;
+    uint8_t content[4096];
+    int ret = 0;
+    size = sizeof(content);
+    ret = stun_serialize(ind, content, &size);
+    if(ret < 0) {
+        loge("fail to serialize indication message: %d", ret);
+    } else {
+        sendto(fd, content, size, 0, addr, socklen);
     }
 
-    stun_free_message(resp);
-    stun_free_message(req);
     stun_free_message(ind);
-
-    //start handshake
-    if(status & (HANDSHAKE_SUCC | HANDSHAKING)) return;
+    ind = NULL;
+}
+void send_dtls_clienthello(int fd, struct sockaddr* addr, socklen_t socklen) {
+    logfunc();
+    if(fd < 0 || !addr || !socklen) return;
     logd("starting handshaking...");
     BIO* bio = SSL_get_wbio(ssl);
     int ret = SSL_do_handshake(ssl);
@@ -354,6 +367,76 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     } else {
         loge("NO wio avaliable..");
     }
+}
+
+void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
+    logfunc();
+    status |= STUN_MSG_RECEIVED;
+    stun_message_t* req = stun_alloc_message();
+    stun_message_t* resp = stun_alloc_message();
+    if(!req || !resp) {
+        loge("fail to allocate message: %p %p", req, resp);
+        return;
+    }
+    stun_parse(req, buf, len);
+    if(req->header->type == (STUN_SUCC_RESPONSE | STUN_METHOD_BINDING)) {
+        stun_free_message(req);
+        stun_free_message(resp);
+        logd("get bind response.");
+        send_stun_indication(fd, addr, socklen);
+        send_dtls_clienthello(fd, addr, socklen);
+        return;
+    }
+    stun_set_method_and_class(resp, STUN_METHOD_BINDING, STUN_SUCC_RESPONSE);
+    memcpy(resp->header->trans_id, req->header->trans_id, sizeof(resp->header->trans_id));
+
+    stun_attr_header* usrname = NULL;
+    usrname = stun_get_attr(req, USERNAME);
+    if(!usrname) {
+        loge("fail to get username in request");
+    } else {
+        stun_add_attr(resp, usrname);
+    }
+
+    struct sockaddr_in* addrin = (struct sockaddr_in*)addr;
+    stun_attr_xor_mapped_address_ipv4 ipv4;
+    ipv4.header.type = XOR_MAPPED_ADDRESS;
+    ipv4.header.len  = 8;
+    ipv4.family  = 0x01;
+    ipv4.addr  = addrin->sin_addr.s_addr;
+    ipv4.port  = ntohs(addrin->sin_port);
+    stun_add_attr(resp, &ipv4.header);
+
+    stun_attr_message_integrity integrity;
+    bzero(&integrity, sizeof(integrity));
+    integrity.header.type = MESSAGE_INTEGRITY;
+    integrity.header.len  = 20;
+    stun_add_attr(resp, &integrity.header);
+
+    stun_attr_fingerprint fp;
+    fp.header.type = FINGERPRINT;
+    fp.header.len = 4;
+    stun_add_attr(resp, &fp.header);
+    stun_calculate_integrity(resp, (uint8_t*)ice.remotepassword.c_str(), ice.remotepassword.size());
+    stun_calculate_crc32(resp);
+
+    if(fd) {
+        uint8_t content[1024];
+        uint32_t size = sizeof(content);
+        int ret = stun_serialize(resp, content, &size);
+        if(ret < 0) {
+            loge("fail to serialize resp: %d", ret);
+        } else {
+            logd("send stun: %d", size);
+            sendto(fd, content, size, 0, addr, socklen);
+        }
+
+        send_stun_requst(fd, addr, socklen);
+    }
+
+    stun_free_message(resp);
+    stun_free_message(req);
+    return;
 }
 void handle_rtp(char* buf, int32_t len) {
     logfunc();
@@ -412,7 +495,6 @@ int run_srv() {
     EC_KEY_free(ecdh);
     SSL_set_read_ahead(ssl, 1);
 
-    logd("starting handshake...");
     SSL_set_connect_state(ssl);
     while(1) {
         bzero(buf, sizeof(buf));
@@ -430,6 +512,15 @@ int run_srv() {
             continue;
         }
         if(is_stun(buf, ret)) {
+            static int saved = 0;
+            if(!saved) {
+                saved = 1;
+                FILE* fp = fopen("stun.request", "w");
+                if(fp) {
+                    fwrite(buf, 1, ret, fp);
+                    fclose(fp);
+                }
+            }
             handle_stun((uint8_t*)buf, ret, fd, &fromaddr, socklen);
         } else if(is_password(buf, ret)) {
             handle_password((uint8_t*)buf, ret, fd, &fromaddr, socklen);
