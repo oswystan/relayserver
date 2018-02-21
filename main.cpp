@@ -37,6 +37,9 @@ using namespace std;
 #define MASTER_SALT 14
 #define MASTER_LEN  (MASTER_KEY+MASTER_SALT)
 
+const char* cafile = "cacert.pem";
+const char* pkfile = "cakey.pem";
+in_addr_t firstaddr = 0;
 static SSL_CTX *ssl_ctx  = NULL;
 static X509* ssl_cert    = NULL;
 static EVP_PKEY* ssl_key = NULL;
@@ -46,8 +49,6 @@ static srtp_policy_t policy_remote;
 static srtp_policy_t policy_local;
 static srtp_t        stream_in;
 static srtp_t        stream_out;
-const char* cafile = "cacert.pem";
-const char* pkfile = "cakey.pem";
 static unsigned char rtp_buf[4096];
 static unsigned char srtp_buf[4096];
 uint16_t srv_port = 8881;
@@ -417,7 +418,7 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
     fp.header.type = FINGERPRINT;
     fp.header.len = 4;
     stun_add_attr(resp, &fp.header);
-    stun_calculate_integrity(resp, (uint8_t*)ice.remotepassword.c_str(), ice.remotepassword.size());
+    stun_calculate_integrity(resp, (uint8_t*)ice.localpassword.c_str(), ice.localpassword.size());
     stun_calculate_crc32(resp);
 
     if(fd) {
@@ -431,7 +432,10 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
             sendto(fd, content, size, 0, addr, socklen);
         }
 
-        send_stun_requst(fd, addr, socklen);
+        struct sockaddr_in* inaddr = (struct sockaddr_in*)addr;
+        if(firstaddr == inaddr->sin_addr.s_addr) {
+            send_stun_requst(fd, addr, socklen);
+        }
     }
 
     stun_free_message(resp);
@@ -455,7 +459,6 @@ int run_srv() {
     BIO* iofilter = NULL;
     EC_KEY* ecdh = NULL;
     char buf[4096];
-    in_addr_t firstaddr = 0;
     int fd = udp_new_server();
     if(fd < 0) return -1;
 
