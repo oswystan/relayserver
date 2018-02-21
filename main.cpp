@@ -217,6 +217,42 @@ int is_password(char* buf, int32_t len) {
         return 0;
     }
 }
+int do_init_srtp(uint8_t* material) {
+    srtp_err_status_t res;
+    bzero(&policy_remote, sizeof(policy_remote));
+    srtp_crypto_policy_set_rtp_default(&policy_remote.rtp);
+    srtp_crypto_policy_set_rtcp_default(&policy_remote.rtcp);
+    policy_remote.ssrc.type = ssrc_any_inbound;
+    unsigned char remote_policy_key[MASTER_LEN];
+    policy_remote.key = (unsigned char*)&remote_policy_key;
+    policy_remote.window_size = 128;
+    policy_remote.allow_repeat_tx = 0;
+    memcpy(policy_remote.key, material+MASTER_KEY, MASTER_KEY);
+    memcpy(policy_remote.key+MASTER_KEY, material+MASTER_KEY*2+MASTER_SALT, MASTER_SALT);
+    res = srtp_create(&stream_in, &policy_remote);
+    if(res != srtp_err_status_ok) {
+        loge("fail to create srtp stream_in: %d", res);
+        return -1;
+    }
+
+    unsigned char master_key[MASTER_LEN];
+    bzero(&policy_local, sizeof(policy_local));
+    srtp_crypto_policy_set_rtp_default(&policy_local.rtp);
+    srtp_crypto_policy_set_rtcp_default(&policy_local.rtcp);
+    policy_local.ssrc.type = ssrc_any_inbound;
+    policy_local.key = master_key;
+    policy_local.window_size = 128;
+    policy_local.allow_repeat_tx = 0;
+    memcpy(policy_local.key, material, MASTER_KEY);
+    memcpy(policy_local.key+MASTER_KEY, material+MASTER_KEY*2, MASTER_SALT);
+    res = srtp_create(&stream_out, &policy_local);
+    if(res != srtp_err_status_ok) {
+        loge("fail to create srtp stream_out: %d", res);
+        return -1;
+    }
+    logi("init srtp OK");
+    return 0;
+}
 void handle_password(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
     if(!buf || !len || fd < 0 || !addr || !socklen) return;
@@ -251,6 +287,21 @@ void handle_dtls(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
         if(ret == 1) {
             status = status & (~HANDSHAKING);
             status |= HANDSHAKE_SUCC;
+            unsigned char material[MASTER_LEN*2];
+            bzero(material, sizeof(material));
+            if(!SSL_export_keying_material(ssl, material, sizeof(material), "EXTRACTOR-dtls_srtp", 19, NULL, 0, 0)) {
+                loge("fail to export key");
+            } else {
+                log("MASTER KEY:");
+                log("\n---------------------\n");
+                for(ret=0; ret<(int)sizeof(material); ret++) {
+                    if(ret > 0  && ret % 8 == 0) log("\n");
+                    log("%02x ", material[ret]);
+                }
+                log("\n---------------------\n");
+            }
+
+            do_init_srtp(material);
         }
     }
     if(iofilter) {
@@ -373,6 +424,7 @@ void send_dtls_clienthello(int fd, struct sockaddr* addr, socklen_t socklen) {
     }
 }
 
+
 void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
     status |= STUN_MSG_RECEIVED;
@@ -447,7 +499,18 @@ void handle_stun(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, sockl
 }
 void handle_rtp(char* buf, int32_t len) {
     logfunc();
+    srtp_err_status_t res;
     if(!buf || !len) return;
+
+    int datalen = len;
+    res = srtp_unprotect(stream_in, buf, &datalen);
+    //res = srtp_unprotect(stream_out, buf, &datalen);
+    if(res != srtp_err_status_ok) {
+        loge("fail to unprotect srtp: %d len=%d datalen=%d", res, len, datalen);
+        return;
+    }
+    rtp_header* header = (rtp_header*)buf;
+    logd("rtp ssrc: %08x", ntohl(header->ssrc));
 }
 void handle_rtcp(char* buf, int32_t len) {
     logfunc();
