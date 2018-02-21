@@ -24,7 +24,7 @@ all: $(bin) $(cert)
 $(prog_main): main.o stun.o bio.o
 	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
-$(prog_dtls): dtls.o
+$(prog_dtls): dtls.o bio.o
 	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_srtp): srtp.o
@@ -47,7 +47,7 @@ $(cert):
 
 clean:
 	@echo "cleaning..."
-	$(h) rm -f *.o $(bin) $(cert)
+	$(h) rm -f *.o $(bin) 
 	@echo "done."
 
 #######################################################################

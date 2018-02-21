@@ -53,6 +53,7 @@ int dtls_bio_filter_free(BIO *bio) {
 int dtls_bio_filter_write(BIO *bio, const char *in, int inl) {
     /* Forward data to the write BIO */
     int32_t ret = BIO_write(bio->next_bio, in, inl);
+    logd("bio write: %d %d", ret, inl);
 
     dtls_bio_filter *filter = (dtls_bio_filter *)bio->ptr;
     if(filter != NULL) {
@@ -82,7 +83,7 @@ long dtls_bio_filter_ctrl(BIO *bio, int cmd, long num, void *ptr) {
             return size;
         }
         default:
-            loge("invalid ctrl cmd: %08x", cmd);
+            loge("invalid ctrl cmd: %d", cmd);
     }
     return 0;
 }

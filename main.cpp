@@ -56,6 +56,9 @@ uint16_t cli_port = 8882;
 const char* srv_ip = "192.168.1.102";
 char password[64];
 char username[64];
+BIO* ioread = NULL;
+BIO* iowrite = NULL;
+BIO* iofilter = NULL;
 
 #define STUN_MSG_RECEIVED 0x01
 #define HANDSHAKING       0x02
@@ -238,24 +241,24 @@ void handle_password(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, s
 void handle_dtls(uint8_t* buf, int32_t len, int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
     if(!buf || !len || fd < 0 || !addr || !socklen) return;
-    if(status & HANDSHAKE_SUCC) return;
-    if(!(status & HANDSHAKING)) return;
+    //if(status & HANDSHAKE_SUCC) return;
+    //if(!(status & HANDSHAKING)) return;
+    logd("handle dtls data size: %d", len);
 
-    BIO* bio = SSL_get_rbio(ssl);
-    BIO* wio = SSL_get_wbio(ssl);
-    if(bio) {
-        BIO_write(bio, buf, len);
+    if(ioread) {
+        BIO_write(ioread, buf, len);
         int ret = SSL_do_handshake(ssl);
         if(ret == 1) {
             status = status & (~HANDSHAKING);
             status |= HANDSHAKE_SUCC;
         }
     }
-    if(wio) {
+    if(iofilter) {
         char buf[4096];
         int pending = 0;
-        while((pending = BIO_ctrl_pending(wio)) > 0) {
-            int ret = BIO_read(wio->next_bio, buf, pending);
+        while((pending = BIO_ctrl_pending(iofilter)) > 0) {
+            int ret = BIO_read(iowrite, buf, pending);
+            logd("pending dtls data: %d ret=%d bio: %p wio=%p", pending, ret, iowrite, iofilter);
             if(ret > 0) {
                 logd("dtls: send handshake data: %d", ret);
                 sendto(fd, buf, ret, 0, addr, socklen);
@@ -346,7 +349,7 @@ void send_dtls_clienthello(int fd, struct sockaddr* addr, socklen_t socklen) {
     logfunc();
     if(fd < 0 || !addr || !socklen) return;
     logd("starting handshaking...");
-    BIO* bio = SSL_get_wbio(ssl);
+    BIO* bio = iofilter;
     int ret = SSL_do_handshake(ssl);
     if(ret < 0) {
         loge("HANDSHAKE: %s", ERR_error_string(SSL_get_error(ssl, ret), NULL));
@@ -358,7 +361,7 @@ void send_dtls_clienthello(int fd, struct sockaddr* addr, socklen_t socklen) {
         char buf[4096];
         int pending = 0;
         while((pending = BIO_ctrl_pending(bio)) > 0) {
-            int ret = BIO_read(bio->next_bio, buf, pending);
+            int ret = BIO_read(iowrite, buf, pending);
             if(ret > 0) {
                 logd("send handshake data: %d", ret);
                 sendto(fd, buf, ret, 0, addr, socklen);
@@ -454,9 +457,6 @@ void handle_rtcp(char* buf, int32_t len) {
 int run_srv() {
     logfunc();
     int ret = 0;
-    BIO* ioread  = NULL;
-    BIO* iowrite = NULL;
-    BIO* iofilter = NULL;
     EC_KEY* ecdh = NULL;
     char buf[4096];
     int fd = udp_new_server();
@@ -472,6 +472,7 @@ int run_srv() {
     BIO_set_mem_eof_return(ioread, -1);
     BIO_set_mem_eof_return(iowrite, -1);
     BIO_push(iofilter, iowrite);
+    logd("read: %p write: %p filter: %p", ioread, iowrite, iofilter);
 
     if(0 != sec_env_init(0)) {
         return -1;
@@ -515,19 +516,19 @@ int run_srv() {
             continue;
         }
         if(is_stun(buf, ret)) {
-            static int saved = 0;
-            if(!saved) {
-                saved = 1;
-                FILE* fp = fopen("stun.request", "w");
-                if(fp) {
-                    fwrite(buf, 1, ret, fp);
-                    fclose(fp);
-                }
-            }
+            //static int saved = 0;
+            //if(!saved) {
+            //    saved = 1;
+            //    FILE* fp = fopen("stun.request", "w");
+            //    if(fp) {
+            //        fwrite(buf, 1, ret, fp);
+            //        fclose(fp);
+            //    }
+            //}
             handle_stun((uint8_t*)buf, ret, fd, &fromaddr, socklen);
         } else if(is_password(buf, ret)) {
             handle_password((uint8_t*)buf, ret, fd, &fromaddr, socklen);
-        } else if(is_dtls(buf, ret)) {
+        } else if(is_dtls(buf, ret) || (!is_rtp(buf, ret) && !is_rtcp(buf, ret))) {
             handle_dtls((uint8_t*)buf, ret, fd, &fromaddr, socklen);
         }
         if(status == NORMAL_STATUS) {
