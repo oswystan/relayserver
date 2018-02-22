@@ -68,7 +68,7 @@ public:
     uint32_t operation;   // 1-push; 2-pull;
 };
 
-class WrtcSTUN {
+class WrtcProtocolSTUN {
 public:
     int handleMessage(uint8_t* buf, uint32_t len);
     void sendBindingRequest();
@@ -76,19 +76,21 @@ public:
     int getPeerConnection();
 };
 
-class WrtcDTLS {
+class WrtcProtocolDTLS {
+    int init(const char* certfile, const char* keyfile);
+    int config(WrtcPeerCfg* cfg);
     int handleMessage(uint8_t* buf, uint32_t len);
     int exportMasterKey(uint8_t* material, uint32_t len);
     int getStatus();
 };
 
-class WrtcSRTP {
+class WrtcProtocolSRTP {
     int handleMessage(uint8_t* buf, uint32_t len);
     int unprotect(uint8_t* in, uint8_t* out, uint32_t len);
     int protect(uint8_t* in, uint8_t* out, uint32_t len);
     int init(uint8_t* masterKey, uint32_t* len);
 };
-class WrtcRTCP {
+class WrtcProtocolRTCP {
     void sendFir();
     void sendReport();
     void sendBye();
