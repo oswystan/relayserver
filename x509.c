@@ -43,7 +43,8 @@ void generate_fingerprint() {
     printf("\n");
 
 out:
-    fclose(fp);
+    if(fp) fclose(fp);
+    if(x) X509_free(x);
 }
 
 int main(int argc, char *argv[])
