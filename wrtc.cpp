@@ -235,6 +235,29 @@ private:
 
 //------------------------------------------
 //
+// AsyncSocket
+//
+//------------------------------------------
+
+class AsyncSocket {
+    int init(uv_loop_t* loop);
+    int connect(const char* addr, uint16_t port);
+    int listen(const char* addr, uint16_t port);
+    int serve();
+    int send(uint8_t* buf, uint32_t len);
+    int close();
+    virtual void onrecv(uint8_t* buf, uint32_t len);
+};
+class MemPool {
+    int init(uint32_t size, uint32_t cnt);
+    uint8_t* accquire();
+    int release(uint8_t* buf);
+    int reset();
+};
+
+
+//------------------------------------------
+//
 // operator protocol
 //
 //------------------------------------------

@@ -17,13 +17,13 @@ prog_x509 := x509
 prog_uv   := uv
 bin       := $(prog_dtls) $(prog_main) $(prog_srtp) $(prog_stun) $(prog_x509) $(prog_uv)
 cert      := cacert.pem cakey.pem
-cflags 	  := -I./thirdparty/srtp/include
+cflags 	  := -I./thirdparty/srtp/include -std=c++11
 ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2 -lz -luv
 h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
 
-$(prog_main): main.o stun.o bio.o
+$(prog_main): main.o stun.o bio.o async_socket.o
 	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_dtls): dtls.o bio.o
