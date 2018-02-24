@@ -8,8 +8,16 @@ namespace wrtc {
 // internal data structures
 //
 //------------------------------------------
+
+#define STREAM_CREATED 0x01
+#define STREAM_INITED  0x02
+#define STREAM_STARTED 0x04
+
 class WrtcStream
 {
+    int init() {
+        return initLocalCfg(localCfg);
+    }
     void onMediaData(uint8_t* buf, uint32_t len) {
         if(srtp->unprotect(buf, relayBuffer, len) <= 0) {
             if(fdRelay >= 0) sendRelayData(relayBuffer, len);
@@ -24,22 +32,55 @@ class WrtcStream
         sendMediaData(mediaBuffer, len);
     }
 
+    int config(req) {
+        setRemoteCfg(req);
+        return 0;
+    }
+    int start(req) {
+        if(status & STREAM_STARTED) return 0;
+        mediaFd = createUdpClient(mediaPort);
+        relayFd = createUdpClient(relayPort);
+        rtcp->sendFir();
+    };
+    int relay(req) {
+        if(streamType == PUSH) {
+            if(getAddr(req->addr_dst, req->port_dst)) return 0;
+            addRelay(req->addr_dst, req->port_dst);
+        } else {
+            if(relayAddrs.size() > 0) {
+                addr = relayAddrs.begin();
+            } else {
+                addr = new sockaddr_in;
+            }
+            setAddr(req->addr_src, req->port_src, AF_INET);
+        }
+    }
+    int stop(req) {
+        if(!(status & STREAM_STARTED)) return 0;
+        rtcp->sendBye();
+        close(mediaFd) && close(relayFd);
+    }
+
 private:
     int sendMediaData(uint8_t* buf, uint32_t len);
-    int sendRelayData(uint8_t* buf, uint32_t len);
+    int sendRelayData(uint8_t* buf, uint32_t len) {
+        for(auto &i : relayAddrs) {
+            sendto(fdRelay, buf, len, 0, i, sizeof(struct sockaddr_in));
+        }
+    }
 
 public:
     WrtcPeerCfg remoteCfg;
     WrtcPeerCfg localCfg;
     uint16_t    mediaPort;
     uint16_t    relayPort;
-    int         fdMedia;
-    int         fdRelay;
+    int         mediaFd;
+    int         relayFd;
 
     uint8_t* mediaBuffer;
     uint8_t* relayBuffer;
 
-    list<WrtcRelayAddr*> relayAddrs;
+    list<struct sockaddr_in*> relayAddrs;
 
     WrtcSRTP* srtp;
     WrtcDTLS* dtls;
@@ -47,10 +88,6 @@ public:
     WrtcRTCP* rtcp;
 };
 
-class WrtcRelayAddr {
-    struct sockaddr addr;
-    uint16_t port;
-};
 
 class WrtcPeerCfg
 {
