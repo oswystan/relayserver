@@ -47,7 +47,7 @@ out:
     if(x) X509_free(x);
 }
 
-int main(int argc, char *argv[])
+int main()
 {
     generate_fingerprint();
     return 0;

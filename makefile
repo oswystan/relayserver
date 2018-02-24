@@ -14,10 +14,11 @@ prog_main := a.out
 prog_srtp := srtp
 prog_stun := stunsrv
 prog_x509 := x509
-bin       := $(prog_dtls) $(prog_main) $(prog_srtp) $(prog_stun) $(prog_x509)
+prog_uv   := uv
+bin       := $(prog_dtls) $(prog_main) $(prog_srtp) $(prog_stun) $(prog_x509) $(prog_uv)
 cert      := cacert.pem cakey.pem
 cflags 	  := -I./thirdparty/srtp/include
-ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2 -lz
+ld_flags  := -L./thirdparty/srtp/lib -lssl -lcrypto -ldl -lsrtp2 -lz -luv
 h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
@@ -36,6 +37,9 @@ $(prog_stun): stunsrv.o stun.o
 	@ echo "[gen] "$@
 $(prog_x509): x509.c
 	$(h) gcc $^ -o $@ $(ld_flags)
+	@ echo "[gen] "$@
+$(prog_uv): uv.o
+	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 %.o:%.c
 	$(h) g++ -c -g $(cflags) $< -o $@
