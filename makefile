@@ -23,7 +23,7 @@ h         := $(if $(filter 1,$V),,@)
 
 all: $(bin) $(cert)
 
-$(prog_main): main.o stun.o bio.o async_socket.o
+$(prog_main): main.o stun.o bio.o udp_socket.o
 	$(h) g++ $^ -o $@ $(ld_flags)
 	@ echo "[gen] "$@
 $(prog_dtls): dtls.o bio.o
